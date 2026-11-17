@@ -1,5 +1,6 @@
 """AI Studio local MVP. Python 3.12+, no external dependencies."""
 from production_assets import number_project
+from clarifications import context as clarification_context
 from model_catalog import merge_settings, discover
 from workflow import prepare, accept, overview
 from ai_production import analyze, approve_analysis, run_stage, approve_stage
@@ -52,6 +53,7 @@ def validate(p):
         raw = base64.b64decode(a.get('data', ''), validate=True)
         if hashlib.sha256(raw).hexdigest() != a.get('sha256'):
             raise ValueError('Нарушена целостность файла: ' + str(a.get('name')))
+    clarification_context(p)
     return p
 
 def report(p):
