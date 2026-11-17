@@ -1,4 +1,5 @@
 """AI Studio local MVP. Python 3.12+, no external dependencies."""
+from workflow import prepare, accept, overview
 import base64
 import hashlib
 import json
@@ -91,8 +92,12 @@ class Handler(BaseHTTPRequestHandler):
             if length <= 0 or length > MAX_BODY: return self.send(413, {'error': 'Максимальный размер запроса — 100 МБ'})
             p = json.loads(self.rfile.read(length))
             path = urlparse(self.path).path
+            if path == '/api/workflow':
+                validate(p)
+                prepare(p)
+                return self.send(200, {'workflow': p.get('workflow'), **overview(p)})
             if path == '/api/report': return self.send(200, report(validate(p)))
-            if path not in ['/api/projects', '/api/restore']: return self.send(404, {'error': 'Не найдено'})
+            if path not in ['/api/projects', '/api/restore', '/api/accept-workflow']: return self.send(404, {'error': 'Не найдено'})
             validate(p)
             with connection() as db:
                 if path == '/api/restore':
@@ -102,6 +107,9 @@ class Handler(BaseHTTPRequestHandler):
                 old = db.execute('SELECT body FROM projects WHERE id=?', (p['id'],)).fetchone()
                 if old and json.loads(old[0]).get('revision', 0) != p.get('revision', 0):
                     return self.send(409, {'error': 'Проект изменён в другом окне. Перезагрузите страницу.'})
+                prepare(p)
+                if path == '/api/accept-workflow':
+                    accept(p)
                 p['revision'] = p.get('revision', 0) + 1
                 p['updated'] = datetime.now(timezone.utc).isoformat()
                 db.execute('INSERT OR REPLACE INTO projects VALUES (?, ?)', (p['id'], json.dumps(p, ensure_ascii=False)))
