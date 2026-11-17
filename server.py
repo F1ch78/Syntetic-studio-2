@@ -1,4 +1,5 @@
 """AI Studio local MVP. Python 3.12+, no external dependencies."""
+from model_catalog import merge_settings, discover
 from workflow import prepare, accept, overview
 from ai_production import analyze, approve_analysis, run_stage, approve_stage
 import base64
@@ -100,11 +101,12 @@ class Handler(BaseHTTPRequestHandler):
             if length <= 0 or length > MAX_BODY: return self.send(413, {'error': 'Максимальный размер запроса — 100 МБ'})
             p = json.loads(self.rfile.read(length))
             path = urlparse(self.path).path
-            if path == '/api/settings':
+            if path in ['/api/settings', '/api/settings/check']:
                 old = ai_config()
-                cfg = {'endpoint':p.get('endpoint','https://anymodel.org/v1').rstrip('/'), 'model':p.get('model',''), 'image_model':p.get('image_model',''), 'key':p.get('key') or old.get('key','')}
-                if not cfg['endpoint'].startswith('https://') or not cfg['model'].strip():
-                    raise ValueError('Укажите HTTPS-адрес и название текстовой модели')
+                cfg = merge_settings(p, old)
+                if path == '/api/settings/check':
+                    result = discover(cfg)
+                    return self.send(200, result)
                 SETTINGS.write_text(json.dumps(cfg), encoding='utf-8')
                 SETTINGS.chmod(0o600)
                 return self.send(200, {'saved':True})
