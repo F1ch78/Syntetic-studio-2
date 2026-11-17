@@ -1,4 +1,5 @@
 """Read-only authenticated provider discovery; never sends keys on redirects."""
+from network_errors import explain
 import json
 import os
 import urllib.request
@@ -50,7 +51,7 @@ def discover(config):
     except urllib.error.HTTPError as e:
         messages={401:'Ключ не принят. Проверьте API-ключ.',403:'Доступ запрещён провайдером или сетевым шлюзом.',404:'Список моделей не найден. Проверьте базовый URL: к нему добавляется /models.',429:'Лимит запросов превышен. Повторите позже.'}
         raise ValueError(messages.get(e.code,f'API вернул HTTP {e.code}. Проверка не завершена.')) from None
-    except (urllib.error.URLError,TimeoutError):
-        raise ValueError('Не удалось подключиться. Проверьте интернет и базовый URL; возможен тайм-аут.') from None
+    except (urllib.error.URLError,OSError) as e:
+        raise ValueError(explain(e)) from None
     except (json.JSONDecodeError,UnicodeDecodeError):
         raise ValueError('Сервер вернул не JSON. Проверьте базовый URL API.') from None
