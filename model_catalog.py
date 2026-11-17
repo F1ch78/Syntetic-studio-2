@@ -1,5 +1,6 @@
 """Read-only authenticated provider discovery; never sends keys on redirects."""
 from network_errors import explain
+from provider_errors import http_message
 import json
 import os
 import urllib.request
@@ -46,11 +47,15 @@ def discover(config):
                 raise ValueError('API вернул некорректную запись модели')
             if item['id'] in seen: continue
             seen.add(item['id'])
-            models.append({'id':item['id']})
+            model={'id':item['id']}
+            if urlsplit(endpoint).hostname=='anymodel.org':
+                model['kind']=item.get('kind') or 'text'
+            elif isinstance(item.get('kind'),str):
+                model['kind']=item['kind']
+            models.append(model)
         return {'models':sorted(models,key=lambda x:x['id']), 'checked_at':datetime.now(timezone.utc).isoformat(), 'status':'connected', 'message':f'Подключение успешно. API вернул моделей: {len(models)}. Генерация и баланс не проверены. Назначение моделей уточняйте у провайдера.'}
     except urllib.error.HTTPError as e:
-        messages={401:'Ключ не принят. Проверьте API-ключ.',403:'Доступ запрещён провайдером или сетевым шлюзом.',404:'Список моделей не найден. Проверьте базовый URL: к нему добавляется /models.',429:'Лимит запросов превышен. Повторите позже.'}
-        raise ValueError(messages.get(e.code,f'API вернул HTTP {e.code}. Проверка не завершена.')) from None
+        raise ValueError(http_message(e,endpoint,key)) from None
     except (urllib.error.URLError,OSError) as e:
         raise ValueError(explain(e)) from None
     except (json.JSONDecodeError,UnicodeDecodeError):

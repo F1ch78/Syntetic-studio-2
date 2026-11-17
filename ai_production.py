@@ -1,5 +1,6 @@
 """Provider-backed project intake; all generated work requires human approval."""
 from network_errors import explain
+from provider_errors import http_message
 import json
 import os
 import urllib.request
@@ -25,7 +26,7 @@ def call_model(config, messages):
         if not isinstance(result,dict): raise ValueError('AI вернул неподходящий формат')
         return result
     except urllib.error.HTTPError as e:
-        raise ValueError(f'API вернул HTTP {e.code}. Проверьте адрес, модель, ключ и баланс.') from None
+        raise ValueError(http_message(e,endpoint,key)) from None
     except (KeyError, IndexError, json.JSONDecodeError):
         raise ValueError('Не удалось прочитать структурированный ответ AI. Проект не изменён.') from None
     except (urllib.error.URLError, OSError) as e:
@@ -158,7 +159,7 @@ def generate_frame(p, config):
         if len(raw)>20*1024*1024: raise ValueError('Размер изображения превышает 20 МБ')
         mime='image/png' if raw.startswith(b'\x89PNG\r\n\x1a\n') else 'image/jpeg' if raw.startswith(b'\xff\xd8\xff') else None
         if not mime: raise ValueError('API вернул неподдерживаемый формат изображения')
-    except urllib.error.HTTPError as e: raise ValueError(f'API изображений: HTTP {e.code}. Проверьте модель и поддержку images/generations.') from None
+    except urllib.error.HTTPError as e: raise ValueError(http_message(e,endpoint,key)) from None
     except (KeyError,IndexError,json.JSONDecodeError): raise ValueError('Модель должна возвращать b64_json через images/generations. Этот ответ не поддерживается.') from None
     except (urllib.error.URLError,OSError) as e: raise ValueError(explain(e)) from None
     asset=dict(id=str(uuid4()),name=shot['name']+' / '+kind,type=mime,data=encoded,size=len(raw),sha256=hashlib.sha256(raw).hexdigest(),status='Черновик',prompt=prompt,model=model)
