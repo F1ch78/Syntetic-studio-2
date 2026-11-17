@@ -10,7 +10,10 @@ def explain(error):
         return ('TLS_CERTIFICATE: Python не смог проверить сертификат сервера. Проверьте дату и время Windows. '
                 'Если используется антивирусная HTTPS-проверка или корпоративный прокси, нужен его доверенный сертификат в Windows/Python. Проверка сертификатов не отключена.')
     if isinstance(reason,ssl.SSLError):
-        return 'TLS_HANDSHAKE: не удалось установить защищённое соединение. Возможна несовместимость сервера, VPN или HTTPS-проверки антивируса.'
+        known={'UNEXPECTED_EOF_WHILE_READING':'соединение закрыто до завершения TLS', 'WRONG_VERSION_NUMBER':'получен ответ, не соответствующий ожидаемому TLS; проверьте тип прокси', 'TLSV1_ALERT_PROTOCOL_VERSION':'сервер или посредник отклонил версию TLS', 'SSLV3_ALERT_HANDSHAKE_FAILURE':'сервер или посредник отклонил согласование TLS', 'TLSV1_ALERT_INTERNAL_ERROR':'сервер или посредник сообщил внутреннюю ошибку TLS'}
+        code=getattr(reason,'reason',None)
+        detail=(' ['+code+']: '+known[code]) if code in known else ''
+        return 'TLS_HANDSHAKE'+detail+': не удалось установить защищённое соединение. Причину нужно проверить сравнением Python и Windows curl; ключ ещё не проверен.'
     if isinstance(reason,socket.gaierror):
         return 'DNS: не удалось определить адрес сервера. Проверьте домен в базовом URL и доступность сайта; VPN только в браузере не обеспечивает доступ для Python.'
     if isinstance(reason,(TimeoutError,socket.timeout)):
