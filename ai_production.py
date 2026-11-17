@@ -1,5 +1,5 @@
 """Provider-backed project intake; all generated work requires human approval."""
-from production_assets import image_task, number_project
+from production_assets import image_task, image_tasks, number_project
 from https_transport import curl_open
 from network_errors import explain
 from provider_errors import http_message
@@ -80,7 +80,7 @@ def approve_analysis(p):
     return p
 
 def run_stage(p, config, stage, feedback=''):
-    if stage=='images': return generate_frame(p,config)
+    if stage=='images': return generate_batch(p,config)
     production=p.get('production',{})
     if production.get('status')!='Утверждено': raise ValueError('Сначала согласуйте разбор материалов')
     supported=['bible','script','storyboard']
@@ -117,14 +117,15 @@ def approve_stage(p, stage):
     if entry.get('status')!='На согласовании': raise ValueError('Нет результата для согласования')
     result=entry['result']
     if stage=='images':
-        if result.get('entity_id'):
-            entity=next(e for e in p['entities'] if e['id']==result['entity_id'])
-            entity['reference']=result['asset_id']
-            entity['status']='Утверждено'
-        else:
-            shot=next(s for s in p['shots'] if s['id']==result['shot_id'])
-            shot[result['kind']]=result['asset_id']
-        next(a for a in p['assets'] if a['id']==result['asset_id'])['status']='Утверждено'
+        for item in result.get('items',[result]):
+            if item.get('entity_id'):
+                entity=next(e for e in p['entities'] if e['id']==item['entity_id'])
+                entity['reference']=item['asset_id']
+                entity['status']='Утверждено'
+            else:
+                shot=next(s for s in p['shots'] if s['id']==item['shot_id'])
+                shot[item['kind']]=item['asset_id']
+            next(a for a in p['assets'] if a['id']==item['asset_id'])['status']='Утверждено'
         entry['status']='Утверждено' if all(s.get('start') and s.get('end') for s in p['shots']) else 'Ожидает следующего кадра'
         return p
     if stage in ['script','bible']:
@@ -148,7 +149,7 @@ def approve_stage(p, stage):
     entry['status']='Утверждено'
     return p
 
-def generate_frame(p, config):
+def generate_frame(p, config, task=None):
     import base64
     import hashlib
     production=p.get('production',{})
@@ -160,7 +161,7 @@ def generate_frame(p, config):
     model=config.get('image_model')
     key=config.get('key') or os.environ.get('AI_STUDIO_API_KEY')
     if not model or not key: raise ValueError('Укажите модель изображений и API-ключ в настройках')
-    task=image_task(p)
+    task=task or image_task(p)
     prompt=task['prompt']
     endpoint=config.get('endpoint','https://anymodel.org/v1').rstrip('/')
     if not endpoint.startswith('https://'): raise ValueError('Требуется HTTPS API')
@@ -184,4 +185,29 @@ def generate_frame(p, config):
     p['assets'].append(asset)
     previous=stages.get('images',{})
     stages['images']={'status':'На согласовании','result':{**{k:v for k,v in task.items() if k!='prompt'},'asset_id':asset['id']},'history':previous.get('history',[])+([previous['result']] if previous.get('result') else [])}
+    return p
+
+def generate_batch(p,config):
+    from concurrent.futures import ThreadPoolExecutor
+    from copy import deepcopy
+    count=p.get('image_batch_size',1)
+    if isinstance(count,bool) or not isinstance(count,int) or not 1<=count<=10:
+        raise ValueError('Размер партии должен быть целым числом от 1 до 10')
+    previous=p.get('production',{}).get('stages',{}).get('images',{})
+    if previous.get('status')=='На согласовании':raise ValueError('Сначала согласуйте текущую партию')
+    tasks=image_tasks(p,count)
+    def work(task):
+        local=deepcopy(p)
+        try:
+            generate_frame(local,dict(config),task)
+            return local['assets'][-1],local['production']['stages']['images']['result'],None
+        except (ValueError,KeyError,TypeError) as e:return None,None,task['text']+': '+str(e)
+    with ThreadPoolExecutor(max_workers=min(3,len(tasks))) as pool:
+        outputs=list(pool.map(work,tasks))
+    items=[];errors=[]
+    for asset,result,error in outputs:
+        if error:errors.append(error)
+        else:p['assets'].append(asset);items.append(result)
+    if not items:raise ValueError('Партия не выполнена. '+'; '.join(errors))
+    p['production']['stages']['images']={'status':'На согласовании','result':{'text':f'Готово {len(items)} из {len(tasks)} изображений','items':items,'errors':errors,'requested':count},'history':previous.get('history',[])+([previous['result']] if previous.get('result') else [])}
     return p

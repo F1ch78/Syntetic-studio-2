@@ -46,7 +46,8 @@ def scene_entities(p,scene):
     return result
 
 
-def image_task(p):
+def image_task(p, skip=None):
+    skip=skip or set()
     number_project(p)
     assets={a['id']:a for a in p['assets']}
     # Prepare references before producing any missing scene frame.
@@ -56,7 +57,7 @@ def image_task(p):
     for shot in pending:
         scene=next(s for s in p['scenes'] if s['id']==shot['scene'])
         entities=scene_entities(p,scene)
-        contexts.append((shot,scene,entities))
+        ready=True
         for e in entities:
             ref=assets.get(e.get('reference'))
             if ref:
@@ -64,7 +65,12 @@ def image_task(p):
                 if e.get('status') not in APPROVED or ref.get('status') not in APPROVED:
                     raise ValueError('Утвердите карточку и её референс в разделе «Канон»: '+e['name'])
             else:
+                ready=False
+                if ('entity',e['id']) in skip:continue
                 return {'entity_id':e['id'],'kind':'reference','text':'Эталон: '+e['name'], 'prompt':f"Create a consistent reference sheet for {e['kind']} {e['name']}. Exact appearance and constraints: {e['description']}. Project visual style: {p.get('bible','')}. No text labels. This is a reference, not a film scene.", 'references':[], 'scene_ids':[s['id'] for s in p['scenes'] if e['id'] in s.get('character_ids',[])+[s.get('location_id')]]}
+        kind='start' if not shot.get('start') else 'end'
+        if ready and (shot['id'],kind) not in skip:contexts.append((shot,scene,entities))
+    if not contexts:raise ValueError('Нет независимых задач: сначала согласуйте результаты текущей партии.')
     shot,scene,entities=contexts[0]
     kind='start' if not shot.get('start') else 'end'
     refs=[];cards=[]
@@ -76,3 +82,14 @@ def image_task(p):
     prompt=f"Create {kind.upper()} frame for {shot['code']}: {shot['description']}. Location/action: {scene['description']}. Preserve identity, anatomy, clothing, colors and location geometry from the numbered reference images. Character/location cards: {json.dumps(cards,ensure_ascii=False)}. Canon rules: {json.dumps([r for r in p['rules'] if r.get('status') in APPROVED],ensure_ascii=False)}. Visual style: {p.get('bible','')}."
     if kind=='end':prompt+=' The last reference is the START frame; preserve continuity.'
     return {'shot_id':shot['id'],'kind':kind,'text':shot['code']+' '+kind.upper(),'prompt':prompt,'references':refs,'scene_ids':[scene['id']]}
+
+def image_tasks(p,count):
+    tasks=[];skip=set()
+    for _ in range(count):
+        try: task=image_task(p,skip)
+        except ValueError as e:
+            if tasks and str(e).startswith('Нет независимых задач'):break
+            raise
+        tasks.append(task)
+        skip.add(('entity',task['entity_id']) if task.get('entity_id') else (task['shot_id'],task['kind']))
+    return tasks
