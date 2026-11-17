@@ -1,4 +1,5 @@
 """Provider-backed project intake; all generated work requires human approval."""
+from https_transport import curl_open
 from network_errors import explain
 from provider_errors import http_message
 import json
@@ -20,7 +21,7 @@ def call_model(config, messages):
     body = json.dumps({'model': config['model'], 'messages': messages, 'response_format': {'type':'json_object'}}).encode()
     req=urllib.request.Request(endpoint+'/chat/completions',data=body,headers={'Content-Type':'application/json','Authorization':'Bearer '+key})
     try:
-        with urllib.request.urlopen(req, timeout=180) as r:
+        with (curl_open(req,timeout=180) if os.name=='nt' else urllib.request.urlopen(req,timeout=180)) as r:
             response=json.load(r)
         result=json.loads(response['choices'][0]['message']['content'])
         if not isinstance(result,dict): raise ValueError('AI вернул неподходящий формат')
@@ -153,7 +154,7 @@ def generate_frame(p, config):
     if not endpoint.startswith('https://'): raise ValueError('Требуется HTTPS API')
     request=urllib.request.Request(endpoint+'/images/generations',data=json.dumps({'model':model,'prompt':prompt,'n':1,'response_format':'b64_json'}).encode(),headers={'Content-Type':'application/json','Authorization':'Bearer '+key})
     try:
-        with urllib.request.urlopen(request,timeout=180) as r: response=json.load(r)
+        with (curl_open(request,timeout=180) if os.name=='nt' else urllib.request.urlopen(request,timeout=180)) as r: response=json.load(r)
         encoded=response['data'][0]['b64_json']
         raw=base64.b64decode(encoded,validate=True)
         if len(raw)>20*1024*1024: raise ValueError('Размер изображения превышает 20 МБ')

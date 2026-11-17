@@ -1,4 +1,5 @@
 """Read-only authenticated provider discovery; never sends keys on redirects."""
+from https_transport import curl_open
 from network_errors import explain
 from provider_errors import http_message
 import json
@@ -35,7 +36,7 @@ def discover(config):
     if not key: raise ValueError('Введите API-ключ для этого базового URL')
     req=urllib.request.Request(endpoint+'/models',headers={'Authorization':'Bearer '+key,'Accept':'application/json'})
     try:
-        with urllib.request.build_opener(NoRedirect()).open(req,timeout=25) as response:
+        with (curl_open(req,timeout=25) if os.name=='nt' else urllib.request.build_opener(NoRedirect()).open(req,timeout=25)) as response:
             raw=response.read(2*1024*1024+1)
         if len(raw)>2*1024*1024: raise ValueError('Список моделей слишком большой')
         payload=json.loads(raw)
