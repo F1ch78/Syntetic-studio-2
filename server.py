@@ -1,4 +1,5 @@
 """AI Studio local MVP. Python 3.12+, no external dependencies."""
+from production_assets import number_project
 from model_catalog import merge_settings, discover
 from workflow import prepare, accept, overview
 from ai_production import analyze, approve_analysis, run_stage, approve_stage
@@ -81,7 +82,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/projects':
             with connection() as db:
                 projects = [json.loads(r[0]) for r in db.execute('SELECT body FROM projects')]
-            return self.send(200, projects)
+            return self.send(200, [number_project(p) for p in projects])
         if path == '/api/settings':
             cfg = ai_config()
             return self.send(200, {k:v for k,v in cfg.items() if k != 'key'} | {'configured':bool(cfg.get('key') or os.environ.get('AI_STUDIO_API_KEY'))})
@@ -136,6 +137,7 @@ class Handler(BaseHTTPRequestHandler):
                 current = db.execute('SELECT body FROM projects WHERE id=?', (p['id'],)).fetchone()
                 if current and json.loads(current[0]).get('revision',0) != p.get('revision',0):
                     return self.send(409, {'error':'Проект изменился во время операции. Перезагрузите страницу; запрос AI мог быть оплачен.'})
+                number_project(p)
                 p['revision'] = p.get('revision', 0) + 1
                 p['updated'] = datetime.now(timezone.utc).isoformat()
                 db.execute('INSERT OR REPLACE INTO projects VALUES (?, ?)', (p['id'], json.dumps(p, ensure_ascii=False)))

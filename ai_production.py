@@ -1,4 +1,5 @@
 """Provider-backed project intake; all generated work requires human approval."""
+from production_assets import image_task, number_project
 from https_transport import curl_open
 from network_errors import explain
 from provider_errors import http_message
@@ -94,7 +95,7 @@ def run_stage(p, config, stage, feedback=''):
     context['analysis']=production['analysis']
     context['approved_stages']={k:v['result'] for k,v in stages.items() if v['status']=='Утверждено'}
     schema='{"text":"полный результат этапа на русском"}'
-    if stage=='storyboard': schema='{"text":"режиссёрское описание", "scenes":[{"name":"...","description":"...","shots":[{"name":"...","description":"действие и камера","duration":5}]}]}'
+    if stage=='storyboard': schema='{"text":"режиссёрское описание", "scenes":[{"name":"...","description":"...","location_id":"ID существующей локации или пусто", "location_name":"название локации", "location_description":"визуальные признаки локации", "character_ids":["ID существующего персонажа"], "shots":[{"name":"...","description":"действие и камера","duration":5}]}]}'
     result=call_model(config,[{'role':'system','content':f'Ты производственный помощник. Выполни только этап {stage}. Используй согласованные материалы и обратную связь. Не заявляй о создании медиа. Ответ только JSON по схеме {schema}.'},{'role':'user','content':json.dumps({'project':context,'feedback':feedback},ensure_ascii=False)}])
     if not isinstance(result.get('text'),str) or not result['text'].strip(): raise ValueError('AI не вернул результат этапа')
     if stage=='storyboard':
@@ -116,8 +117,13 @@ def approve_stage(p, stage):
     if entry.get('status')!='На согласовании': raise ValueError('Нет результата для согласования')
     result=entry['result']
     if stage=='images':
-        shot=next(s for s in p['shots'] if s['id']==result['shot_id'])
-        shot[result['kind']]=result['asset_id']
+        if result.get('entity_id'):
+            entity=next(e for e in p['entities'] if e['id']==result['entity_id'])
+            entity['reference']=result['asset_id']
+            entity['status']='Утверждено'
+        else:
+            shot=next(s for s in p['shots'] if s['id']==result['shot_id'])
+            shot[result['kind']]=result['asset_id']
         next(a for a in p['assets'] if a['id']==result['asset_id'])['status']='Утверждено'
         entry['status']='Утверждено' if all(s.get('start') and s.get('end') for s in p['shots']) else 'Ожидает следующего кадра'
         return p
@@ -128,6 +134,14 @@ def approve_stage(p, stage):
     elif stage=='storyboard':
         for item in result['scenes']:
             scene={'id':str(uuid4()),'name':item['name'],'description':item['description'],'status':'Утверждено'}
+            location=next((e for e in p['entities'] if e['id']==item.get('location_id') and e.get('kind')=='Локация'),None)
+            if not location and item.get('location_name'):
+                location=next((e for e in p['entities'] if e.get('kind')=='Локация' and e['name']==item['location_name']),None)
+                if not location:
+                    location=dict(id=str(uuid4()),name=item['location_name'],description=item.get('location_description',''),kind='Локация',reference='',status='Черновик')
+                    p['entities'].append(location)
+            scene['location_id']=location['id'] if location else ''
+            scene['character_ids']=[eid for eid in item.get('character_ids',[]) if any(e['id']==eid and e.get('kind')=='Персонаж' for e in p['entities'])]
             p['scenes'].append(scene)
             for shot in item['shots']:
                 p['shots'].append({**shot,'id':str(uuid4()),'scene':scene['id'],'status':'Утверждено','start':'','end':''})
@@ -146,13 +160,16 @@ def generate_frame(p, config):
     model=config.get('image_model')
     key=config.get('key') or os.environ.get('AI_STUDIO_API_KEY')
     if not model or not key: raise ValueError('Укажите модель изображений и API-ключ в настройках')
-    target=next(((s,k) for s in p['shots'] for k in ['start','end'] if not s.get(k)),None)
-    if not target: raise ValueError('Все начальные и конечные кадры уже назначены')
-    shot,kind=target
-    prompt=f"Create the {kind} frame of this shot: {shot['description']}. Project visual bible: {p.get('bible','')}. Approved project rules: {json.dumps(p['rules'],ensure_ascii=False)}"
+    task=image_task(p)
+    prompt=task['prompt']
     endpoint=config.get('endpoint','https://anymodel.org/v1').rstrip('/')
     if not endpoint.startswith('https://'): raise ValueError('Требуется HTTPS API')
-    request=urllib.request.Request(endpoint+'/images/generations',data=json.dumps({'model':model,'prompt':prompt,'n':1,'response_format':'b64_json'}).encode(),headers={'Content-Type':'application/json','Authorization':'Bearer '+key})
+    payload={'model':model,'prompt':prompt,'n':1,'response_format':'b64_json'}
+    if task['references']:
+        references=[next(a for a in p['assets'] if a['id']==aid) for aid in task['references']]
+        if sum(a.get('size',0) for a in references)>24*1024*1024:raise ValueError('Референсы превышают 24 МБ. Уменьшите их размер.')
+        payload['images']=[f"data:{a['type']};base64,{a['data']}" for a in references]
+    request=urllib.request.Request(endpoint+'/images/generations',data=json.dumps(payload).encode(),headers={'Content-Type':'application/json','Authorization':'Bearer '+key})
     try:
         with (curl_open(request,timeout=180) if os.name=='nt' else urllib.request.urlopen(request,timeout=180)) as r: response=json.load(r)
         encoded=response['data'][0]['b64_json']
@@ -163,8 +180,8 @@ def generate_frame(p, config):
     except urllib.error.HTTPError as e: raise ValueError(http_message(e,endpoint,key)+f' Модель: {model}. Длина промпта: {len(prompt)} символов.') from None
     except (KeyError,IndexError,json.JSONDecodeError): raise ValueError('Модель должна возвращать b64_json через images/generations. Этот ответ не поддерживается.') from None
     except (urllib.error.URLError,OSError) as e: raise ValueError(explain(e)) from None
-    asset=dict(id=str(uuid4()),name=shot['name']+' / '+kind,type=mime,data=encoded,size=len(raw),sha256=hashlib.sha256(raw).hexdigest(),status='Черновик',prompt=prompt,model=model)
+    asset=dict(id=str(uuid4()),name=task['text'],type=mime,data=encoded,size=len(raw),sha256=hashlib.sha256(raw).hexdigest(),status='Черновик',prompt=prompt,model=model,scene_ids=task['scene_ids'],reference_ids=task['references'],entity_id=task.get('entity_id'),shot_id=task.get('shot_id'))
     p['assets'].append(asset)
     previous=stages.get('images',{})
-    stages['images']={'status':'На согласовании','result':{'text':asset['name'],'asset_id':asset['id'],'shot_id':shot['id'],'kind':kind},'history':previous.get('history',[])+([previous['result']] if previous.get('result') else [])}
+    stages['images']={'status':'На согласовании','result':{**{k:v for k,v in task.items() if k!='prompt'},'asset_id':asset['id']},'history':previous.get('history',[])+([previous['result']] if previous.get('result') else [])}
     return p
