@@ -27,3 +27,15 @@ class ProviderTests(unittest.TestCase):
         build.return_value.open.return_value.__enter__.return_value.read.return_value=json.dumps({'data':[{'id':'am/text'},{'id':'am/image','kind':'image'},{'id':'am/vision','kind':'imageToText'}]}).encode()
         models=discover({'endpoint':'https://anymodel.org/v1','key':'test'})['models']
         self.assertEqual({m['id']:m['kind'] for m in models},{'am/text':'text','am/image':'image','am/vision':'imageToText'})
+
+class ImageErrorTests(unittest.TestCase):
+    def test_prompt_limit_and_secret_redaction(self):
+        body={'error':{'code':'prompt_too_long','message':'Limit 2500, received 9000. Bearer topsecret sk-hidden','request_id':'err-123'}}
+        error=HTTPError('https://anymodel.org',400,'',{},io.BytesIO(json.dumps(body).encode()))
+        text=http_message(error,'https://anymodel.org/v1','topsecret')
+        self.assertIn('prompt_too_long',text);self.assertIn('2500',text)
+        self.assertNotIn('topsecret',text);self.assertNotIn('sk-hidden',text)
+    def test_wrong_model_code(self):
+        body={'error':{'code':'model_not_served','message':'Route unavailable'}}
+        error=HTTPError('https://anymodel.org',400,'',{},io.BytesIO(json.dumps(body).encode()))
+        self.assertIn('model_not_served',http_message(error,'https://anymodel.org/v1'))

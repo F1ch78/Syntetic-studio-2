@@ -63,7 +63,7 @@ try{const result=await api(route,{...project,...extra});projects=projects.filter
 if(p.id===projectId&&(route==='approve-analysis'||route==='approve-stage')){
  const next=route==='approve-analysis'?'bible':({bible:'script',script:'storyboard',storyboard:'images',images:p.production.stages.images.status==='Утверждено'?null:'images'})[extra._stage];
  if(next)await aiAction('run-stage',{_stage:next});
-}}catch(e){toast(e.message);$('#saved').textContent='Операция не завершена';}finally{buttons.forEach(b=>b.disabled=false)}
+}}catch(e){toast(e.message);$('#saved').textContent='Операция не завершена';let errorBox=$('#operationError');if(!errorBox){errorBox=document.createElement('div');errorBox.id='operationError';errorBox.className='card';errorBox.setAttribute('role','alert');$('#view').prepend(errorBox);}errorBox.textContent=e.message;}finally{buttons.forEach(b=>b.disabled=false)}
 }
 function bindIntake(){
 api('settings').then(c=>{if(tab!=='Материалы проекта')return;const f=$('#settings');f.elements.endpoint.value=c.endpoint;for(const k of ['model','image_model']){f.elements[k].innerHTML='<option value="">Не выбрана</option>'+(c[k]?`<option value="${esc(c[k])}">${esc(c[k])} (сохранена)</option>`:'');f.elements[k].value=c[k]||'';}$('#apiStatus').textContent=c.configured?'Ключ сохранён. Нажмите «Проверить подключение», чтобы узнать текущее состояние.':'API-ключ ещё не задан.'}).catch(e=>toast(e.message));

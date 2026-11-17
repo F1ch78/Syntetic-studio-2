@@ -160,7 +160,7 @@ def generate_frame(p, config):
         if len(raw)>20*1024*1024: raise ValueError('Размер изображения превышает 20 МБ')
         mime='image/png' if raw.startswith(b'\x89PNG\r\n\x1a\n') else 'image/jpeg' if raw.startswith(b'\xff\xd8\xff') else None
         if not mime: raise ValueError('API вернул неподдерживаемый формат изображения')
-    except urllib.error.HTTPError as e: raise ValueError(http_message(e,endpoint,key)) from None
+    except urllib.error.HTTPError as e: raise ValueError(http_message(e,endpoint,key)+f' Модель: {model}. Длина промпта: {len(prompt)} символов.') from None
     except (KeyError,IndexError,json.JSONDecodeError): raise ValueError('Модель должна возвращать b64_json через images/generations. Этот ответ не поддерживается.') from None
     except (urllib.error.URLError,OSError) as e: raise ValueError(explain(e)) from None
     asset=dict(id=str(uuid4()),name=shot['name']+' / '+kind,type=mime,data=encoded,size=len(raw),sha256=hashlib.sha256(raw).hexdigest(),status='Черновик',prompt=prompt,model=model)
