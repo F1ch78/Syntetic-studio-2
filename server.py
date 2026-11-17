@@ -1,5 +1,6 @@
 """AI Studio local MVP. Python 3.12+, no external dependencies."""
 from workflow import prepare, accept, overview
+from ai_production import analyze, approve_analysis, run_stage, approve_stage
 import base64
 import hashlib
 import json
@@ -16,6 +17,10 @@ DATA = Path(os.environ.get('AI_STUDIO_DATA', ROOT / 'data'))
 DATA.mkdir(parents=True, exist_ok=True)
 DB = DATA / 'studio.sqlite3'
 MAX_BODY = 100 * 1024 * 1024
+SETTINGS = DATA / 'ai-settings.json'
+def ai_config():
+    return json.loads(SETTINGS.read_text()) if SETTINGS.exists() else {'endpoint':'https://anymodel.org/v1','model':''}
+
 
 def connection():
     db = sqlite3.connect(DB)
@@ -76,6 +81,9 @@ class Handler(BaseHTTPRequestHandler):
             with connection() as db:
                 projects = [json.loads(r[0]) for r in db.execute('SELECT body FROM projects')]
             return self.send(200, projects)
+        if path == '/api/settings':
+            cfg = ai_config()
+            return self.send(200, {k:v for k,v in cfg.items() if k != 'key'} | {'configured':bool(cfg.get('key') or os.environ.get('AI_STUDIO_API_KEY'))})
         if path == '/api/health': return self.send(200, {'status': 'ok'})
         files = {'/': ('index.html', 'text/html; charset=utf-8'), '/app.js': ('app.js', 'text/javascript; charset=utf-8'), '/style.css': ('style.css', 'text/css; charset=utf-8')}
         if path not in files: return self.send(404, {'error': 'Не найдено'})
@@ -92,12 +100,20 @@ class Handler(BaseHTTPRequestHandler):
             if length <= 0 or length > MAX_BODY: return self.send(413, {'error': 'Максимальный размер запроса — 100 МБ'})
             p = json.loads(self.rfile.read(length))
             path = urlparse(self.path).path
+            if path == '/api/settings':
+                old = ai_config()
+                cfg = {'endpoint':p.get('endpoint','https://anymodel.org/v1').rstrip('/'), 'model':p.get('model',''), 'image_model':p.get('image_model',''), 'key':p.get('key') or old.get('key','')}
+                if not cfg['endpoint'].startswith('https://') or not cfg['model'].strip():
+                    raise ValueError('Укажите HTTPS-адрес и название текстовой модели')
+                SETTINGS.write_text(json.dumps(cfg), encoding='utf-8')
+                SETTINGS.chmod(0o600)
+                return self.send(200, {'saved':True})
             if path == '/api/workflow':
                 validate(p)
                 prepare(p)
                 return self.send(200, {'workflow': p.get('workflow'), **overview(p)})
             if path == '/api/report': return self.send(200, report(validate(p)))
-            if path not in ['/api/projects', '/api/restore', '/api/accept-workflow']: return self.send(404, {'error': 'Не найдено'})
+            if path not in ['/api/projects', '/api/restore', '/api/accept-workflow', '/api/analyze', '/api/approve-analysis', '/api/run-stage', '/api/approve-stage']: return self.send(404, {'error': 'Не найдено'})
             validate(p)
             with connection() as db:
                 if path == '/api/restore':
@@ -107,9 +123,17 @@ class Handler(BaseHTTPRequestHandler):
                 old = db.execute('SELECT body FROM projects WHERE id=?', (p['id'],)).fetchone()
                 if old and json.loads(old[0]).get('revision', 0) != p.get('revision', 0):
                     return self.send(409, {'error': 'Проект изменён в другом окне. Перезагрузите страницу.'})
+                if path == '/api/analyze': analyze(p, ai_config())
+                if path == '/api/approve-analysis': approve_analysis(p)
+                if path == '/api/run-stage': run_stage(p, ai_config(), p.pop('_stage',''), p.pop('_feedback',''))
+                if path == '/api/approve-stage': approve_stage(p, p.pop('_stage',''))
                 prepare(p)
                 if path == '/api/accept-workflow':
                     accept(p)
+                db.execute('BEGIN IMMEDIATE')
+                current = db.execute('SELECT body FROM projects WHERE id=?', (p['id'],)).fetchone()
+                if current and json.loads(current[0]).get('revision',0) != p.get('revision',0):
+                    return self.send(409, {'error':'Проект изменился во время операции. Перезагрузите страницу; запрос AI мог быть оплачен.'})
                 p['revision'] = p.get('revision', 0) + 1
                 p['updated'] = datetime.now(timezone.utc).isoformat()
                 db.execute('INSERT OR REPLACE INTO projects VALUES (?, ?)', (p['id'], json.dumps(p, ensure_ascii=False)))
